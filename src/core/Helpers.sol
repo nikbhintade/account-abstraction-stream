@@ -86,6 +86,7 @@ function _packValidationData(
  * keccak function over calldata.
  * @dev copy calldata into memory, do keccak and drop allocated memory. Strangely, this is more efficient than letting solidity do it.
  */
+// uint256[] uintArr -> uintArr.offset
     function calldataKeccak(bytes calldata data) pure returns (bytes32 ret) {
         assembly ("memory-safe") {
             let mem := mload(0x40)

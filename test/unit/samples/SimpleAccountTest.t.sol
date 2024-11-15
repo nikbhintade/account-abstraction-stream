@@ -14,7 +14,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 
 contract RevertOnCalledByExecute {
     fallback() external {
-        revert("");
+        revert("revert on receiving ether");
     }
 }
 
