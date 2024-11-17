@@ -11,6 +11,50 @@ import {ValidationData, _packValidationData} from "src/core/Helpers.sol";
 import {SimpleAccount} from "src/samples/SimpleAccount.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
 
+contract SimpleAccountRevert is BaseAccount {
+    IEntryPoint private s_entryPoint;
+    Mode private s_mode;
+
+    enum Mode {
+        RevertOnValidate,
+        SendLessPreFund
+    }
+
+    constructor(IEntryPoint _entryPoint, Mode mode) {
+        s_entryPoint = _entryPoint;
+        s_mode = mode;
+    }
+
+    function entryPoint() public view override returns (IEntryPoint) {
+        return s_entryPoint;
+    }
+
+    function _validateSignature(PackedUserOperation calldata userOp, bytes32 userOpHash)
+        internal
+        view
+        override
+        returns (uint256 validationData)
+    {
+        (userOp, userOpHash);
+        if (s_mode == Mode.RevertOnValidate) {
+            revert("Validate Reverted");
+        } else {
+            return SIG_VALIDATION_SUCCESS;
+        }
+    }
+
+    function _payPrefund(uint256 missingAccountFunds) internal override {
+        if (missingAccountFunds != 0) {
+            (bool success,) = payable(msg.sender).call{
+                value: (s_mode == Mode.SendLessPreFund) ? missingAccountFunds / 2 : missingAccountFunds,
+                gas: type(uint256).max
+            }("");
+            (success);
+            //ignore failure (its EntryPoint's job to verify, not account.)
+        }
+    }
+}
+
 //// @title EntryPointHarness Contract
 /// @notice This is a harness contract that we are using to expose the internal functions of EntryPoint.sol
 contract EPH is EntryPoint {
@@ -291,17 +335,19 @@ contract EntryPointTest is Test {
         vm.assertEq(mUserOp.maxPriorityFeePerGas + block.basefee, entryPoint.expose_getUserOpGasPrice(mUserOp));
     }
 
-    function createSimpleAccountAndRelatedData(bool changeOwner, bool changeAccount)
+    function createSimpleAccountAndRelatedData(bool changeOwner, bool changeAccount, SimpleAccountRevert.Mode mode)
         internal
         returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory)
     {
         Account memory owner = makeAccount("owner");
         Account memory randomUser = makeAccount("randomUser");
 
-        simpleAccount = new SimpleAccount(entryPoint, owner.addr);
+        address simpleAccountAddress = changeAccount
+            ? address(new SimpleAccountRevert(entryPoint, mode))
+            : address(new SimpleAccount(entryPoint, owner.addr));
 
         PackedUserOperation memory pUserOp = PackedUserOperation({
-            sender: address(simpleAccount),
+            sender: simpleAccountAddress,
             nonce: 0,
             initCode: hex"",
             callData: hex"",
@@ -319,7 +365,7 @@ contract EntryPointTest is Test {
         pUserOp.signature = abi.encodePacked(r, s, v);
 
         EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp({
-            sender: address(simpleAccount),
+            sender: simpleAccountAddress,
             nonce: 0,
             verificationGasLimit: 100_000,
             callGasLimit: 100_000,
@@ -334,7 +380,7 @@ contract EntryPointTest is Test {
         EntryPoint.UserOpInfo memory userOpInfo =
             EntryPoint.UserOpInfo({mUserOp: mUserOp, userOpHash: userOpHash, prefund: 0, contextOffset: 0, preOpGas: 0});
 
-        vm.deal(address(simpleAccount), 1 ether);
+        vm.deal(simpleAccountAddress, 1 ether);
 
         return (pUserOp, userOpInfo);
     }
@@ -342,7 +388,7 @@ contract EntryPointTest is Test {
     function testValidateAccountPrepayment() external {
         // validation successful
         (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
-            createSimpleAccountAndRelatedData(true, false);
+            createSimpleAccountAndRelatedData(true, false, SimpleAccountRevert.Mode.SendLessPreFund);
 
         uint256 opIndex = 0;
         uint256 requiredPrefund = 0.1 ether;
@@ -357,7 +403,7 @@ contract EntryPointTest is Test {
 
         // validation failed
 
-        (userOp, userOpInfo) = createSimpleAccountAndRelatedData(false, false);
+        (userOp, userOpInfo) = createSimpleAccountAndRelatedData(false, false, SimpleAccountRevert.Mode.SendLessPreFund);
 
         validationData = entryPoint.expose_validateAccountPrepayment(
             opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit
@@ -368,22 +414,73 @@ contract EntryPointTest is Test {
         vm.assertEq(validationData, SIG_VALIDATION_FAILED);
     }
 
-    function testValidateAccountPrepaymentRevertsOnLowGas() external {
+    function testValidateAccountPrepaymentThrowsCorrectError() external {
         (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
-            createSimpleAccountAndRelatedData(false, true);
+            createSimpleAccountAndRelatedData(false, true, SimpleAccountRevert.Mode.RevertOnValidate);
 
         uint256 opIndex = 0;
         uint256 requiredPrefund = 0.1 ether;
-        uint256 verificationGasLimit = 50;
+        uint256 verificationGasLimit = 50_000;
 
         vm.expectRevert(
             abi.encodeWithSelector(
                 IEntryPoint.FailedOpWithRevert.selector,
                 opIndex,
                 "AA23 reverted",
-                hex""
+                abi.encodeWithSignature("Error(string)", "Validate Reverted")
             )
         );
         entryPoint.expose_validateAccountPrepayment(opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit);
+    }
+
+    function testValidateAccountPrepaymentRevertOnInsufficientPrefund() external {
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createSimpleAccountAndRelatedData(false, true, SimpleAccountRevert.Mode.SendLessPreFund);
+
+        uint256 opIndex = 0;
+        uint256 requiredPrefund = 0.1 ether;
+        uint256 verificationGasLimit = 50_000;
+
+        vm.expectRevert(abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA21 didn't pay prefund"));
+        entryPoint.expose_validateAccountPrepayment(opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit);
+    }
+
+    function testValidateAccountPrepaymentTakesMissingAccountFundsFromDeposit() external {
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createSimpleAccountAndRelatedData(true, false, SimpleAccountRevert.Mode.SendLessPreFund);
+
+        uint256 intialSimpleAccountBalance = userOp.sender.balance;
+
+        entryPoint.depositTo{value: 1 ether}(userOp.sender);
+
+        uint256 opIndex = 0;
+        uint256 requiredPrefund = 0.1 ether;
+        uint256 verificationGasLimit = 50_000;
+
+        entryPoint.expose_validateAccountPrepayment(opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit);
+
+        assertEq(userOp.sender.balance, intialSimpleAccountBalance);
+    }
+
+    function sliceBytes(bytes calldata input, uint256 len) public pure returns (bytes memory) {
+        return abi.encodePacked(input[:len]);
+    }
+
+    function testCopyUserOpToMemory() external {
+        bytes memory random52Bytes = this.sliceBytes(abi.encode(keccak256("hello"), keccak256("world")), 52);
+
+        console.log(random52Bytes.length);
+
+        // PackedUserOperation memory userOp = PackedUserOperation({
+        //     sender: address(123),
+        //     nonce: 0,
+        //     initCode: hex"",
+        //     callData: hex"",
+        //     accountGasLimits: bytes32 (uint256(50_000) << 128 | uint256(40_000)),
+        //     preVerificationGas: 50_000,
+        //     gasFees: bytes32 (uint256(30) << 128 | uint256(40))
+        //     paymasterAndData:
+        //     signature:
+        // })
     }
 }
