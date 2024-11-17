@@ -406,7 +406,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
         unchecked {
             MemoryUserOp memory mUserOp = opInfo.mUserOp;
             address sender = mUserOp.sender;
-            _createSenderIfNeeded(opIndex, opInfo, op.initCode);
+            _createSenderIfNeeded(opIndex, opInfo, op.initCode); // line won't be tested
             address paymaster = mUserOp.paymaster;
             uint256 missingAccountFunds = 0;
             if (paymaster == address(0)) {
@@ -422,10 +422,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             if (paymaster == address(0)) {
                 DepositInfo storage senderInfo = deposits[sender];
                 uint256 deposit = senderInfo.deposit;
-
-                // in what condition this will happen?????
-                
                 if (requiredPrefund > deposit) {
+                    // account contract is not sending enough eth back 
                     revert FailedOp(opIndex, "AA21 didn't pay prefund");
                 }
                 senderInfo.deposit = deposit - requiredPrefund;

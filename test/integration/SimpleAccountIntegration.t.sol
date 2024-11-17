@@ -51,8 +51,8 @@ contract SimpleAccountIntegration is Test {
         bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
 
         // sign it and add signature to userOP
-        bytes32 formattedUserOpHash = MessageHashUtils.toEthSignedMessageHash(userOpHash);
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner.key, formattedUserOpHash);
+        // bytes32 formattedUserOpHash = MessageHashUtils.toEthSignedMessageHash(userOpHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner.key, userOpHash);
 
         userOp.signature = abi.encodePacked(r, s, v);
 

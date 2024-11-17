@@ -95,16 +95,16 @@ contract SimepleAccountTest is Test {
             signature: hex""
         });
 
-        bytes32 digest = entryPointInstance.getUserOpHash(userOp); // this is userOpHash
-        bytes32 formattedDigest = MessageHashUtils.toEthSignedMessageHash(digest);
+        bytes32 userOpHash = entryPointInstance.getUserOpHash(userOp); // this is userOpHash
+        // bytes32 formattedDigest = MessageHashUtils.toEthSignedMessageHash(userOp);
 
         // signature components
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPK, formattedDigest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerPK, userOpHash);
 
         // pack above components in correct order
         userOp.signature = abi.encodePacked(r, s, v);
 
-        uint256 result = simpleAccountHarness.expose_validateSignature(userOp, digest);
+        uint256 result = simpleAccountHarness.expose_validateSignature(userOp, userOpHash);
 
         assertEq(result, SIG_VALIDATION_SUCCESS);
     }

@@ -4,9 +4,12 @@ pragma solidity 0.8.24;
 import {Test, console2 as console} from "forge-std/Test.sol";
 
 import {EntryPoint} from "src/core/EntryPoint.sol";
+import {BaseAccount} from "src/core/BaseAccount.sol";
 import {IEntryPoint} from "src/interfaces/IEntryPoint.sol";
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {ValidationData, _packValidationData} from "src/core/Helpers.sol";
+import {SimpleAccount} from "src/samples/SimpleAccount.sol";
+import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
 
 //// @title EntryPointHarness Contract
 /// @notice This is a harness contract that we are using to expose the internal functions of EntryPoint.sol
@@ -33,6 +36,47 @@ contract EPH is EntryPoint {
     function expose_compensate(address payable beneficiary, uint256 amount) external {
         return _compensate(beneficiary, amount);
     }
+
+    function expose_emitUserOperationEvent(
+        UserOpInfo memory opInfo,
+        bool success,
+        uint256 actualGasCost,
+        uint256 actualGas
+    ) external {
+        emitUserOperationEvent(opInfo, success, actualGasCost, actualGas);
+    }
+
+    function expose_emitPrefundTooLow(UserOpInfo memory userOpInfo) external {
+        emitPrefundTooLow(userOpInfo);
+    }
+
+    function expose_getRequiredPrefund(MemoryUserOp memory mUserOp) external pure returns (uint256) {
+        return _getRequiredPrefund(mUserOp);
+    }
+
+    function expose_getUserOpGasPrice(MemoryUserOp memory mUserOp) external view returns (uint256) {
+        return getUserOpGasPrice(mUserOp);
+    }
+
+    function expose_copyUserOpToMemory(PackedUserOperation calldata userOp)
+        external
+        pure
+        returns (MemoryUserOp memory)
+    {
+        MemoryUserOp memory mUserOp;
+        _copyUserOpToMemory(userOp, mUserOp);
+        return mUserOp;
+    }
+
+    function expose_validateAccountPrepayment(
+        uint256 opIndex,
+        PackedUserOperation calldata op,
+        UserOpInfo memory opInfo,
+        uint256 requiredPrefund,
+        uint256 verificationGasLimit
+    ) external returns (uint256 validationData) {
+        return _validateAccountPrepayment(opIndex, op, opInfo, requiredPrefund, verificationGasLimit);
+    }
 }
 
 contract RevertsOnEtherReceived {
@@ -43,6 +87,7 @@ contract RevertsOnEtherReceived {
 
 contract EntryPointTest is Test {
     EPH private entryPoint;
+    SimpleAccount private simpleAccount;
 
     function setUp() external {
         entryPoint = new EPH();
@@ -171,5 +216,174 @@ contract EntryPointTest is Test {
         vm.deal(address(entryPoint), 1 ether);
         vm.expectRevert("AA91 failed send to beneficiary");
         entryPoint.expose_compensate(payable(address(receiver)), 1 ether);
+    }
+
+    function createMuseropAndUserOpInfo()
+        internal
+        pure
+        returns (EntryPoint.UserOpInfo memory, EntryPoint.MemoryUserOp memory)
+    {
+        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp({
+            sender: address(1),
+            nonce: 1,
+            verificationGasLimit: 25,
+            callGasLimit: 26,
+            paymasterVerificationGasLimit: 27,
+            paymasterPostOpGasLimit: 28,
+            preVerificationGas: 29,
+            paymaster: address(2),
+            maxFeePerGas: 30,
+            maxPriorityFeePerGas: 31
+        });
+
+        EntryPoint.UserOpInfo memory userOpInfo = EntryPoint.UserOpInfo({
+            mUserOp: mUserOp,
+            userOpHash: hex"123456",
+            prefund: 32,
+            contextOffset: 33,
+            preOpGas: 34
+        });
+
+        return (userOpInfo, mUserOp);
+    }
+
+    function testEmitUserOperationEvent() external {
+        (EntryPoint.UserOpInfo memory userOpInfo, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
+
+        vm.expectEmit(true, true, true, true, address(entryPoint));
+        emit IEntryPoint.UserOperationEvent(
+            userOpInfo.userOpHash, mUserOp.sender, mUserOp.paymaster, mUserOp.nonce, true, 1234, 5678
+        );
+        entryPoint.expose_emitUserOperationEvent(userOpInfo, true, 1234, 5678);
+    }
+
+    function testEmitUserOperationPrefundTooLow() external {
+        (EntryPoint.UserOpInfo memory userOpInfo, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
+
+        vm.expectEmit(true, true, false, true, address(entryPoint));
+        emit IEntryPoint.UserOperationPrefundTooLow(userOpInfo.userOpHash, mUserOp.sender, mUserOp.nonce);
+        entryPoint.expose_emitPrefundTooLow(userOpInfo);
+    }
+
+    function testGetRequiredPrefund() external view {
+        (, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
+
+        uint256 expectedPrefund = (
+            mUserOp.verificationGasLimit + mUserOp.callGasLimit + mUserOp.paymasterVerificationGasLimit
+                + mUserOp.paymasterPostOpGasLimit + mUserOp.preVerificationGas
+        ) * mUserOp.maxFeePerGas;
+
+        vm.assertEq(entryPoint.expose_getRequiredPrefund(mUserOp), expectedPrefund);
+    }
+
+    function testgetUserOpGasPrice() external view {
+        (, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
+
+        // condition 1: both fee values are same
+        mUserOp.maxPriorityFeePerGas = mUserOp.maxFeePerGas;
+        vm.assertEq(mUserOp.maxFeePerGas, entryPoint.expose_getUserOpGasPrice(mUserOp));
+
+        // condition 2: maxfeeperfas is lower than priority
+        mUserOp.maxPriorityFeePerGas = 500;
+        vm.assertEq(mUserOp.maxFeePerGas, entryPoint.expose_getUserOpGasPrice(mUserOp));
+
+        mUserOp.maxFeePerGas = 1000;
+        vm.assertEq(mUserOp.maxPriorityFeePerGas + block.basefee, entryPoint.expose_getUserOpGasPrice(mUserOp));
+    }
+
+    function createSimpleAccountAndRelatedData(bool changeOwner, bool changeAccount)
+        internal
+        returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory)
+    {
+        Account memory owner = makeAccount("owner");
+        Account memory randomUser = makeAccount("randomUser");
+
+        simpleAccount = new SimpleAccount(entryPoint, owner.addr);
+
+        PackedUserOperation memory pUserOp = PackedUserOperation({
+            sender: address(simpleAccount),
+            nonce: 0,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: bytes32(uint256(100_000) << 128 | uint256(100_000)),
+            preVerificationGas: uint256(100_0000),
+            gasFees: bytes32(uint256(50) << 128 | uint256(50)),
+            paymasterAndData: hex"",
+            signature: hex""
+        });
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(pUserOp);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(changeOwner ? owner.key : randomUser.key, userOpHash);
+
+        pUserOp.signature = abi.encodePacked(r, s, v);
+
+        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp({
+            sender: address(simpleAccount),
+            nonce: 0,
+            verificationGasLimit: 100_000,
+            callGasLimit: 100_000,
+            paymasterVerificationGasLimit: 100_000,
+            paymasterPostOpGasLimit: 100_000,
+            preVerificationGas: 100_000,
+            paymaster: address(0),
+            maxFeePerGas: 30,
+            maxPriorityFeePerGas: 30
+        });
+
+        EntryPoint.UserOpInfo memory userOpInfo =
+            EntryPoint.UserOpInfo({mUserOp: mUserOp, userOpHash: userOpHash, prefund: 0, contextOffset: 0, preOpGas: 0});
+
+        vm.deal(address(simpleAccount), 1 ether);
+
+        return (pUserOp, userOpInfo);
+    }
+
+    function testValidateAccountPrepayment() external {
+        // validation successful
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createSimpleAccountAndRelatedData(true, false);
+
+        uint256 opIndex = 0;
+        uint256 requiredPrefund = 0.1 ether;
+        uint256 verificationGasLimit = 100_000;
+
+        uint256 validationData = entryPoint.expose_validateAccountPrepayment(
+            opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit
+        );
+
+        vm.assertEq(address(entryPoint).balance, requiredPrefund);
+        vm.assertEq(validationData, SIG_VALIDATION_SUCCESS);
+
+        // validation failed
+
+        (userOp, userOpInfo) = createSimpleAccountAndRelatedData(false, false);
+
+        validationData = entryPoint.expose_validateAccountPrepayment(
+            opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit
+        );
+
+        // entryPoint is receiving the amount twice in same test
+        vm.assertEq(address(entryPoint).balance, requiredPrefund * 2);
+        vm.assertEq(validationData, SIG_VALIDATION_FAILED);
+    }
+
+    function testValidateAccountPrepaymentRevertsOnLowGas() external {
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createSimpleAccountAndRelatedData(false, true);
+
+        uint256 opIndex = 0;
+        uint256 requiredPrefund = 0.1 ether;
+        uint256 verificationGasLimit = 50;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IEntryPoint.FailedOpWithRevert.selector,
+                opIndex,
+                "AA23 reverted",
+                hex""
+            )
+        );
+        entryPoint.expose_validateAccountPrepayment(opIndex, userOp, userOpInfo, requiredPrefund, verificationGasLimit);
     }
 }

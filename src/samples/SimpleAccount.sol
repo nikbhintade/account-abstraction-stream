@@ -31,8 +31,8 @@ contract SimpleAccount is BaseAccount, Ownable {
         override
         returns (uint256 validationData)
     {
-        bytes32 digest = MessageHashUtils.toEthSignedMessageHash(userOpHash);
-        address signer = ECDSA.recover(digest, userOp.signature);
+        // bytes32 digest = MessageHashUtils.toEthSignedMessageHash(userOpHash);
+        address signer = ECDSA.recover(userOpHash, userOp.signature);
 
         if (signer == owner()) {
             return SIG_VALIDATION_SUCCESS;
