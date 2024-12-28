@@ -1,66 +1,30 @@
-## Foundry
+## EntryPoint Foundry
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Working on rewriting/testing the EntryPoint implementation by eth-infinitism with Foundry.
 
-Foundry consists of:
+## Covered Functions
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- [ ] senderCreator  
+- [ ] supportsInterface  
+- [x] _compensate  
+- [ ] _executeUserOp  
+- [x] emitUserOperationEvent  
+- [x] emitPrefundTooLow  
+- [ ] handleOps  
+- [ ] handleAggregatedOps  
+- [ ] innerHandleOp  
+- [x] getUserOpHash  
+- [x] _copyUserOpToMemory  
+- [x] _getRequiredPrefund  
+- [ ] _createSenderIfNeeded  
+- [ ] getSenderAddress  
+- [x] _validateAccountPrepayment  
+- [x] _validatePaymasterPrepayment 
+- [x] _validateAccountAndPaymasterValidationData  
+- [x] _getValidationData  
+- [ ] _validatePrepayment  
+- [ ] _postExecution - work on understanding this.
+- [x] getUserOpGasPrice  
+- [ ] getOffsetOfMemoryBytes  
+- [ ] getMemoryBytesFromOffset  
+- [ ] delegateAndRevert  

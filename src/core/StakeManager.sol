@@ -78,7 +78,9 @@ abstract contract StakeManager is IStakeManager {
             "cannot decrease unstake time"
         );
         uint256 stake = info.stake + msg.value;
-        require(stake > 0, "no stake specified");
+        // if first ever call from an entity is with msg.value set to 0
+        require(stake > 0, "no stake specified"); 
+        // 
         require(stake <= type(uint112).max, "stake overflow");
         deposits[msg.sender] = DepositInfo(
             info.deposit,

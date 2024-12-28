@@ -6,9 +6,11 @@ import {Test, console2 as console} from "forge-std/Test.sol";
 import {EntryPoint} from "src/core/EntryPoint.sol";
 import {BaseAccount} from "src/core/BaseAccount.sol";
 import {IEntryPoint} from "src/interfaces/IEntryPoint.sol";
+import {IStakeManager} from "src/interfaces/IStakeManager.sol";
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {ValidationData, _packValidationData} from "src/core/Helpers.sol";
 import {SimpleAccount} from "src/samples/SimpleAccount.sol";
+import {Paymaster} from "src/samples/Paymaster.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
 
 contract SimpleAccountRevert is BaseAccount {
@@ -121,6 +123,23 @@ contract EPH is EntryPoint {
     ) external returns (uint256 validationData) {
         return _validateAccountPrepayment(opIndex, op, opInfo, requiredPrefund, verificationGasLimit);
     }
+
+    function expose_validatePaymasterPrepayment(
+        uint256 opIndex,
+        PackedUserOperation calldata op,
+        UserOpInfo memory opInfo,
+        uint256 requiredPreFund
+    ) external returns (bytes memory context, uint256 validationData) {
+        return _validatePaymasterPrepayment(opIndex, op, opInfo, requiredPreFund);
+    }
+
+    function expose_validatePrepayment(
+        uint256 opIndex,
+        PackedUserOperation calldata userOp,
+        UserOpInfo memory outOpInfo
+    ) external returns (uint256 validationData, uint256 paymasterValidationData) {
+        return _validatePrepayment(opIndex, userOp, outOpInfo);
+    }
 }
 
 contract RevertsOnEtherReceived {
@@ -137,6 +156,9 @@ contract EntryPointTest is Test {
         entryPoint = new EPH();
     }
 
+    /*//////////////////////////////////////////////////////////////
+                          TESTS GETUSEROPHASH
+    //////////////////////////////////////////////////////////////*/
     function testIfUserOperationHashIsCorrect() external {
         PackedUserOperation memory userOp = PackedUserOperation({
             sender: makeAddr("random"),
@@ -174,6 +196,9 @@ contract EntryPointTest is Test {
         vm.assertEq(actualUserOpHash, expectedUserOpHash);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                        TESTS _GETVALIDATIONDATA
+    //////////////////////////////////////////////////////////////*/
     function testGetValidationDataReturnsCorrectValue() external {
         uint256 validationData;
         address aggregator;
@@ -249,6 +274,9 @@ contract EntryPointTest is Test {
         );
     }
 
+    /*//////////////////////////////////////////////////////////////
+                           TESTS _COMPENSATE
+    //////////////////////////////////////////////////////////////*/
     function testCompensateRevertsOnZeroAddress() external {
         vm.expectRevert("AA90 invalid beneficiary");
         entryPoint.expose_compensate(payable(address(0)), 1 ether);
@@ -261,6 +289,10 @@ contract EntryPointTest is Test {
         vm.expectRevert("AA91 failed send to beneficiary");
         entryPoint.expose_compensate(payable(address(receiver)), 1 ether);
     }
+
+    /*//////////////////////////////////////////////////////////////
+         HELPER FUNCTION TO GENERATE USEROPINFO & MEMORYUSEROP
+    //////////////////////////////////////////////////////////////*/
 
     function createMuseropAndUserOpInfo()
         internal
@@ -291,6 +323,9 @@ contract EntryPointTest is Test {
         return (userOpInfo, mUserOp);
     }
 
+    /*//////////////////////////////////////////////////////////////
+           TESTS _EMITUSEROPERATIONEVENT & _EMITPREFUNDTOOLOW
+    //////////////////////////////////////////////////////////////*/
     function testEmitUserOperationEvent() external {
         (EntryPoint.UserOpInfo memory userOpInfo, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
 
@@ -309,6 +344,9 @@ contract EntryPointTest is Test {
         entryPoint.expose_emitPrefundTooLow(userOpInfo);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                       TESTS _GETREQUIREDPREFUND
+    //////////////////////////////////////////////////////////////*/
     function testGetRequiredPrefund() external view {
         (, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
 
@@ -320,6 +358,9 @@ contract EntryPointTest is Test {
         vm.assertEq(entryPoint.expose_getRequiredPrefund(mUserOp), expectedPrefund);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                        TESTS _GETUSEROPGASPRICE
+    //////////////////////////////////////////////////////////////*/
     function testgetUserOpGasPrice() external view {
         (, EntryPoint.MemoryUserOp memory mUserOp) = createMuseropAndUserOpInfo();
 
@@ -335,6 +376,9 @@ contract EntryPointTest is Test {
         vm.assertEq(mUserOp.maxPriorityFeePerGas + block.basefee, entryPoint.expose_getUserOpGasPrice(mUserOp));
     }
 
+    /*//////////////////////////////////////////////////////////////
+      HELPER FUNCTION TO GENERATE PACKEDUSEROPERATION & USEROPINFO
+    //////////////////////////////////////////////////////////////*/
     function createSimpleAccountAndRelatedData(bool changeOwner, bool changeAccount, SimpleAccountRevert.Mode mode)
         internal
         returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory)
@@ -384,6 +428,10 @@ contract EntryPointTest is Test {
 
         return (pUserOp, userOpInfo);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                    TESTS _VALIDATEACCOUNTPREPAYMENT
+    //////////////////////////////////////////////////////////////*/
 
     function testValidateAccountPrepayment() external {
         // validation successful
@@ -462,25 +510,372 @@ contract EntryPointTest is Test {
         assertEq(userOp.sender.balance, intialSimpleAccountBalance);
     }
 
+    /*//////////////////////////////////////////////////////////////
+                       TESTS _COPYUSEROPTOMEMORY
+    //////////////////////////////////////////////////////////////*/
+
     function sliceBytes(bytes calldata input, uint256 len) public pure returns (bytes memory) {
         return abi.encodePacked(input[:len]);
     }
 
-    function testCopyUserOpToMemory() external {
-        bytes memory random52Bytes = this.sliceBytes(abi.encode(keccak256("hello"), keccak256("world")), 52);
+    function testCopyUserOpToMemory() external view {
+        bytes memory paymasterAndData = abi.encodePacked(address(1234), uint128(50_000), uint128(60_000)); // paymaster address, pasymasterverificationgaslimt, paymasterpostopgaslimit
 
-        console.log(random52Bytes.length);
+        console.log(paymasterAndData.length);
 
-        // PackedUserOperation memory userOp = PackedUserOperation({
-        //     sender: address(123),
-        //     nonce: 0,
-        //     initCode: hex"",
-        //     callData: hex"",
-        //     accountGasLimits: bytes32 (uint256(50_000) << 128 | uint256(40_000)),
-        //     preVerificationGas: 50_000,
-        //     gasFees: bytes32 (uint256(30) << 128 | uint256(40))
-        //     paymasterAndData:
-        //     signature:
-        // })
+        PackedUserOperation memory userOp = PackedUserOperation({
+            sender: address(123),
+            nonce: 0,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: bytes32(uint256(50_000) << 128 | uint256(40_000)), //verificationGasLimit, callGasLimit
+            preVerificationGas: 50_000,
+            gasFees: bytes32(uint256(30) << 128 | uint256(40)), // maxPriorityFeePerGas, maxFeePerGas
+            paymasterAndData: paymasterAndData,
+            signature: hex""
+        });
+
+        EntryPoint.MemoryUserOp memory mUserOp = entryPoint.expose_copyUserOpToMemory(userOp);
+
+        assertEq(mUserOp.verificationGasLimit, 50_000);
+        assertEq(mUserOp.callGasLimit, 40_000);
+
+        assertEq(mUserOp.paymasterVerificationGasLimit, 50_000);
+        assertEq(mUserOp.paymasterPostOpGasLimit, 60_000);
+        assertEq(mUserOp.paymaster, address(1234));
+        assertEq(mUserOp.maxPriorityFeePerGas, 30);
+        assertEq(mUserOp.maxFeePerGas, 40);
+    }
+
+    function testCopyUserOpToMemoryReverts() external {
+        bytes memory paymasterAndData = abi.encodePacked(address(1234), uint128(50_000), uint128(60_000)); // paymaster address, pasymasterverificationgaslimt, paymasterpostopgaslimit
+
+        paymasterAndData = this.sliceBytes(paymasterAndData, 51);
+
+        console.log(paymasterAndData.length);
+
+        PackedUserOperation memory userOp = PackedUserOperation({
+            sender: address(123),
+            nonce: 0,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: bytes32(uint256(50_000) << 128 | uint256(40_000)), //verificationGasLimit, callGasLimit
+            preVerificationGas: 50_000,
+            gasFees: bytes32(uint256(30) << 128 | uint256(40)), // maxPriorityFeePerGas, maxFeePerGas
+            paymasterAndData: paymasterAndData,
+            signature: hex""
+        });
+
+        vm.expectRevert("AA93 invalid paymasterAndData");
+        entryPoint.expose_copyUserOpToMemory(userOp);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                 TESTS FOR PAYMASTER RELATED FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    address private sender;
+    Paymaster private paymaster;
+
+    function createPUserOpAndUserOpInfo(uint128 paymasterVerificationGas)
+        internal
+        returns (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo)
+    {
+        sender = makeAddr("sender");
+        paymaster = new Paymaster(entryPoint);
+
+        userOp = PackedUserOperation({
+            sender: sender,
+            nonce: 0,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: hex"",
+            preVerificationGas: 0,
+            gasFees: hex"",
+            paymasterAndData: abi.encodePacked(address(paymaster), paymasterVerificationGas, uint128(0)),
+            signature: hex""
+        });
+
+        // question: should I use exposed function from harness contract to created some conditions for other functions?
+        userOpInfo.mUserOp = entryPoint.expose_copyUserOpToMemory(userOp);
+
+        userOpInfo.userOpHash = entryPoint.getUserOpHash(userOp);
+    }
+
+    function testPaymasterPrepaymentIsSuccessful() external {
+        uint256 requiredPreFund = 0.1 ether;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createPUserOpAndUserOpInfo(100_000);
+
+        entryPoint.depositTo{value: 1 ether}(address(paymaster));
+
+        (bytes memory context, uint256 validationData) =
+            entryPoint.expose_validatePaymasterPrepayment(0, userOp, userOpInfo, requiredPreFund);
+
+        vm.assertEq(context, hex"");
+        vm.assertEq(validationData, SIG_VALIDATION_FAILED);
+    }
+
+    function testPaymasterPrepaymentRevertsOnLowDeposit() external {
+        uint256 requiredPreFund = 0.1 ether;
+        uint256 opIndex = 0;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createPUserOpAndUserOpInfo(100_000);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA31 paymaster deposit too low")
+        );
+        entryPoint.expose_validatePaymasterPrepayment(opIndex, userOp, userOpInfo, requiredPreFund);
+    }
+
+    function testPaymasterPrepaymentRevertsOnLowVerificationLimit() external {
+        uint256 requiredPreFund = 0.1 ether;
+        uint256 opIndex = 0;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) =
+            createPUserOpAndUserOpInfo(10_000);
+
+        entryPoint.depositTo{value: 1 ether}(address(paymaster));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA36 over paymasterVerificationGasLimit")
+        );
+
+        entryPoint.expose_validatePaymasterPrepayment(opIndex, userOp, userOpInfo, requiredPreFund);
+    }
+
+    function testPaymasterPrepaymentRevertsWithFailedOpWithRevertError() external {
+        uint256 requiredPreFund = 0.1 ether;
+        uint256 opIndex = 0;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo) = createPUserOpAndUserOpInfo(10);
+
+        entryPoint.depositTo{value: 1 ether}(address(paymaster));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOpWithRevert.selector, opIndex, "AA33 reverted", hex"")
+        );
+
+        entryPoint.expose_validatePaymasterPrepayment(opIndex, userOp, userOpInfo, requiredPreFund);
+    }
+
+    // gas overflow test
+    // wrong nonce
+    // over the gas limit for verification - verificationGasLimit
+    // success test with - paymaster & simpleAccount
+    // if values in outOpInfo are set correctly
+
+    uint256 callGasLimitsForPrepaymentTest;
+
+    uint256 preVerificationGasForPrepaymentTest;
+
+    uint256 maxFeesPerGasForPrepaymentTest;
+    uint256 maxPriorityFeesPerGasForPrepaymentTest;
+
+    function createPackedUserOperationForPrepaymentValidationTest(uint256 verificationGasLimit, uint256 nonce)
+        internal
+        returns (PackedUserOperation memory userOp)
+    {
+        callGasLimitsForPrepaymentTest = 20_000;
+
+        preVerificationGasForPrepaymentTest = 30_000;
+
+        maxFeesPerGasForPrepaymentTest = 30;
+        maxPriorityFeesPerGasForPrepaymentTest = 10;
+
+        Account memory owner = makeAccount("owner");
+
+        SimpleAccount simpleAccountForPrepaymentTest = new SimpleAccount(entryPoint, owner.addr);
+        Paymaster paymasterForPrepaymentTest = new Paymaster(entryPoint);
+
+        paymasterForPrepaymentTest.addAddressToWhitelist(address(simpleAccountForPrepaymentTest));
+
+        userOp = PackedUserOperation({
+            sender: address(simpleAccountForPrepaymentTest),
+            nonce: nonce,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: bytes32(
+                abi.encodePacked(uint128(verificationGasLimit), uint128(callGasLimitsForPrepaymentTest))
+            ),
+            preVerificationGas: preVerificationGasForPrepaymentTest,
+            gasFees: bytes32(maxPriorityFeesPerGasForPrepaymentTest << 128 | maxFeesPerGasForPrepaymentTest),
+            paymasterAndData: abi.encodePacked(address(paymasterForPrepaymentTest), uint128(15_000), uint128(17_000)),
+            signature: hex""
+        });
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner.key, userOpHash);
+
+        userOp.signature = abi.encodePacked(r, s, v);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                               TEST NONCE
+    //////////////////////////////////////////////////////////////*/
+
+    function testNonceIsCorrectForAccountContract() public {
+        address owner = makeAddr("owner");
+        simpleAccount = new SimpleAccount(entryPoint, owner);
+
+        // calling getNonce of SimpleAccount which inherits BaseAccount
+        uint256 nonce = simpleAccount.getNonce();
+
+        // account contract is newly deployed so nonce for it should be zero
+        assertEq(nonce, 0);
+
+        // increment and test nonce of default key
+        uint192 key = 0;
+
+        vm.prank(address(simpleAccount));
+        entryPoint.incrementNonce(key);
+
+        // calling getNonce of EntryPoint
+        nonce = entryPoint.getNonce(address(simpleAccount), key);
+
+        assertEq(nonce, 1);
+
+        // increment and test nonce of custom key
+        key = 123;
+
+        nonce = entryPoint.getNonce(address(simpleAccount), key);
+        uint256 expectedNonce = uint256(key << 64 | 0);
+        assertEq(nonce, expectedNonce);
+
+        vm.prank(address(simpleAccount));
+        entryPoint.incrementNonce(key);
+
+        // calling getNonce of EntryPoint
+        nonce = entryPoint.getNonce(address(simpleAccount), key);
+        expectedNonce = uint256(key << 64 | 1);
+        assertEq(nonce, expectedNonce);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                         TEST STAKEMANAGER.SOL
+    //////////////////////////////////////////////////////////////*/
+
+    function testRevertOnUnstakeDelaySetToZero() public {
+        vm.expectRevert("must specify unstake delay");
+        entryPoint.addStake(0);
+    }
+
+    function testRevertOnStakeSetToZero() public {
+        vm.expectRevert("no stake specified");
+        entryPoint.addStake(100);
+    }
+
+    // TO BE TESTED TOMORROW
+    function testRevertOnStakeOverflow() public {
+        address random = makeAddr("random");
+        vm.deal(random, type(uint256).max);
+        console.log(type(uint112).max);
+        console.log(type(uint256).max);
+
+        vm.prank(random);
+        entryPoint.addStake{value: type(uint112).max}(100);
+
+        vm.prank(random);
+        vm.expectRevert("stake overflow");
+        entryPoint.addStake{value: 1 ether}(100);
+    }
+
+    function testRevertsOnDecreasedUnstakeDelay() public {
+        entryPoint.addStake{value: 1 ether}(100);
+
+        vm.expectRevert("cannot decrease unstake time");
+        entryPoint.addStake{value: 1 ether}(50);
+    }
+
+    function testAddStakeEmitsEventAndSetsDepositInfo() public {
+        uint256 stake = 1 ether;
+        uint32 unstakeDelaySec = 100;
+
+        vm.expectEmit(true, false, false, true, address(entryPoint));
+        emit IStakeManager.StakeLocked(address(this), stake, unstakeDelaySec);
+        entryPoint.addStake{value: stake}(unstakeDelaySec);
+
+        IStakeManager.DepositInfo memory depositInfo = entryPoint.getDepositInfo(address(this));
+
+        IStakeManager.DepositInfo memory expectedDepositInfo = IStakeManager.DepositInfo({
+            deposit: 0,
+            staked: true,
+            stake: uint112(stake),
+            unstakeDelaySec: unstakeDelaySec,
+            withdrawTime: 0
+        });
+
+        assertEq(keccak256(abi.encode(depositInfo)), keccak256(abi.encode(expectedDepositInfo)));
+    }
+
+    function testUnlockStakeRevertsOnNoStake() public {
+        vm.expectRevert("not staked");
+        entryPoint.unlockStake();
+    }
+
+    function testUnlockStakeRevertOnStakedEqZero() public {
+        entryPoint.addStake{value: 1 ether}(100);
+
+        entryPoint.unlockStake();
+
+        vm.expectRevert("already unstaking");
+        entryPoint.unlockStake();
+    }
+
+    function testUnlockStakeSetsDepositInfoAndEmitsEvent() public {
+        uint256 stake = 1 ether;
+        uint32 unstakeDelaySec = 100;
+
+        entryPoint.addStake{value: stake}(unstakeDelaySec);
+
+        uint48 withdrawTime = uint48(block.timestamp) + unstakeDelaySec;
+
+        vm.expectEmit(true, false, false, true, address(entryPoint));
+        emit IStakeManager.StakeUnlocked(address(this), withdrawTime);
+        entryPoint.unlockStake();
+
+        IStakeManager.DepositInfo memory depositInfo = entryPoint.getDepositInfo(address(this));
+
+        IStakeManager.DepositInfo memory expectedDepositInfo = IStakeManager.DepositInfo({
+            deposit: 0,
+            staked: false,
+            stake: uint112(stake),
+            unstakeDelaySec: unstakeDelaySec,
+            withdrawTime: withdrawTime
+        });
+
+        assertEq(keccak256(abi.encode(depositInfo)), keccak256(abi.encode(expectedDepositInfo)));
+    }
+
+    function testWithdrawStakeRevertOnNoStake() public {
+        address payable receiver = payable(makeAddr("receiver"));
+        vm.expectRevert("No stake to withdraw");
+        entryPoint.withdrawStake(receiver);
+    }
+
+    function testWithdrawStakeRevertsOnCalledBeforeUnlock() public {
+        address payable receiver = payable(makeAddr("receiver"));
+        uint256 stake = 1 ether;
+        uint32 unstakeDelaySec = 100;
+
+        entryPoint.addStake{value: stake}(unstakeDelaySec);
+
+        vm.expectRevert("must call unlockStake() first");
+        entryPoint.withdrawStake(receiver);
+    }
+
+    function testWithdrawStakeRevertsOnCalledBeforeWithdrawTime() public {
+        address payable receiver = payable(makeAddr("receiver"));
+        uint256 stake = 1 ether;
+        uint32 unstakeDelaySec = 100;
+
+        entryPoint.addStake{value: stake}(unstakeDelaySec);
+        entryPoint.unlockStake();
+        
+        vm.expectRevert("Stake withdrawal is not due");
+        entryPoint.withdrawStake(receiver);
     }
 }

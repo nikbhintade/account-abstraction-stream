@@ -467,6 +467,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             } catch {
                 revert FailedOpWithRevert(opIndex, "AA33 reverted", Exec.getReturnData(REVERT_REASON_MAX_LEN));
             }
+            // 1 milli > 100k
             if (preGas - gasleft() > pmVerificationGasLimit) {
                 revert FailedOp(opIndex, "AA36 over paymasterVerificationGasLimit");
             }
