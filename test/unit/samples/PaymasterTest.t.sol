@@ -8,6 +8,7 @@ import {EntryPoint} from "src/core/EntryPoint.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {Paymaster} from "src/samples/Paymaster.sol";
+import {IStakeManager} from "src/interfaces/IStakeManager.sol";
 
 contract PaymasterHarness is Paymaster {
     constructor(EntryPoint entryPoint) Paymaster(entryPoint) {}
@@ -23,9 +24,10 @@ contract PaymasterHarness is Paymaster {
 
 contract PaymasterTest is Test {
     PaymasterHarness private paymaster;
+    EntryPoint private entryPoint;
 
     function setUp() external {
-        EntryPoint entryPoint = new EntryPoint();
+        entryPoint = new EntryPoint();
         paymaster = new PaymasterHarness(entryPoint); // owner of the paymaster is the test contract
     }
 
@@ -102,5 +104,88 @@ contract PaymasterTest is Test {
 
         vm.assertEq(validationData, SIG_VALIDATION_FAILED);
         vm.assertEq(context, hex"");
+    }
+
+    // test cases:
+    // 1. deposit directly from paymaster
+    // 2. stake, unlock, & withdraw from paymaster
+
+    function testDepositAndWithdrawFromPaymasterContract() public {
+        uint256 deposit = 1 ether;
+
+        paymaster.deposit{value: deposit}();
+
+        uint256 actualDeposit = paymaster.getDeposit();
+
+        assertEq(deposit, actualDeposit);
+
+        address payable receiver = payable(makeAddr("receiver"));
+
+        paymaster.withdrawTo(receiver, deposit);
+
+        actualDeposit = paymaster.getDeposit();
+
+        uint256 expectedDepositAfterWithdrawal = 0;
+
+        assertEq(expectedDepositAfterWithdrawal, actualDeposit);
+    }
+
+    function testStakeFunctionsFromPaymaster() public {
+        uint256 stake = 1 ether;
+        uint32 unstakeDelaySec = 100;
+
+        address payable receiver = payable(makeAddr("receiver"));
+
+        // 1. add deposit
+        paymaster.addStake{value: stake}(unstakeDelaySec);
+
+        // check amount of stake
+        IStakeManager.DepositInfo memory depositInfo = entryPoint.getDepositInfo(address(paymaster));
+        assertEq(depositInfo.stake, stake);
+
+        // 2. unlock deposit
+        paymaster.unlockStake();
+
+        // check if stake flag is false
+        depositInfo = entryPoint.getDepositInfo(address(paymaster));
+        bool expectStakedValue = false;
+
+        assertEq(depositInfo.staked, expectStakedValue);
+
+        // 3. withdraw deposit
+        uint256 newTimestamp = 101;
+        vm.warp(newTimestamp);
+        vm.roll(2);
+        paymaster.withdrawStake(receiver);
+
+        // check if receiver received the withdrawn stake amount
+        assertEq(receiver.balance, stake);
+
+        depositInfo = entryPoint.getDepositInfo(address(paymaster));
+        uint112 expectedStakedAmount = 0;
+
+        // check if the entity stake is zero
+        assertEq(depositInfo.stake, expectedStakedAmount);
+    }
+
+    function testPaymasterRevertsOnCalledFromNotTheEntryPoint() public {
+
+        PackedUserOperation memory userOp = PackedUserOperation({
+            sender: address(1),
+            nonce: 0,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: hex"",
+            preVerificationGas: 0,
+            gasFees: hex"",
+            paymasterAndData: hex"",
+            signature: hex""
+        });
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
+        uint256 maxCost = 0;
+
+        vm.expectRevert("Sender not EntryPoint");
+        paymaster.validatePaymasterUserOp(userOp, userOpHash, maxCost);
     }
 }
