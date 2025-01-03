@@ -10,8 +10,10 @@ import {IStakeManager} from "src/interfaces/IStakeManager.sol";
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {ValidationData, _packValidationData} from "src/core/Helpers.sol";
 import {SimpleAccount} from "src/samples/SimpleAccount.sol";
+import {AccountFactory} from "src/samples/AccountFactory.sol";
 import {Paymaster} from "src/samples/Paymaster.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
+import {EmptySenderFactory} from "test/mock/EmptySenderFactory.sol";
 
 contract SimpleAccountRevert is BaseAccount {
     IEntryPoint private s_entryPoint;
@@ -139,6 +141,10 @@ contract EPH is EntryPoint {
         UserOpInfo memory outOpInfo
     ) external returns (uint256 validationData, uint256 paymasterValidationData) {
         return _validatePrepayment(opIndex, userOp, outOpInfo);
+    }
+
+    function expose_createSenderIfNeeded(uint256 opIndex, UserOpInfo memory opInfo, bytes calldata initCode) external {
+        _createSenderIfNeeded(opIndex, opInfo, initCode);
     }
 }
 
@@ -752,5 +758,152 @@ contract EntryPointTest is Test {
         nonce = entryPoint.getNonce(address(simpleAccount), key);
         expectedNonce = uint256(key << 64 | 1);
         assertEq(nonce, expectedNonce);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                         _CREATESENDERIFNEEDED
+    //////////////////////////////////////////////////////////////*/
+
+    function generateUserOpInfo(address _sender, uint256 _verificationGasLimit)
+        public
+        pure
+        returns (EntryPoint.UserOpInfo memory, bytes32)
+    {
+        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp({
+            sender: _sender,
+            nonce: 0,
+            verificationGasLimit: _verificationGasLimit,
+            callGasLimit: 0,
+            paymasterVerificationGasLimit: 0,
+            paymasterPostOpGasLimit: 0,
+            preVerificationGas: 0,
+            paymaster: address(0),
+            maxFeePerGas: 0,
+            maxPriorityFeePerGas: 0
+        });
+
+        bytes32 userOpHash = keccak256("CreateUserOpHashForUserOpInfo");
+        EntryPoint.UserOpInfo memory userOpInfo =
+            EntryPoint.UserOpInfo({mUserOp: mUserOp, userOpHash: userOpHash, prefund: 0, contextOffset: 0, preOpGas: 0});
+
+        return (userOpInfo, userOpHash);
+    }
+
+    function testRevertIfSenderAlreadyConstructed() public {
+        AccountFactory factory = new AccountFactory();
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+        uint256 verificationGas = type(uint24).max;
+        uint256 userOpIndex = 0;
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        bytes32 byteCodeHash =
+            keccak256(abi.encodePacked(type(SimpleAccount).creationCode, abi.encode(entryPoint, owner)));
+        address expectedSender = factory.getAccountAddress(salt, byteCodeHash);
+
+        (EntryPoint.UserOpInfo memory userOpInfo,) = generateUserOpInfo(expectedSender, verificationGas);
+
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, userOpIndex, "AA10 sender already constructed")
+        );
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
+    }
+
+    function testRevertIfAA13() public {
+        AccountFactory factory = new AccountFactory();
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+        uint256 verificationGas = type(uint16).max;
+        uint256 userOpIndex = 0;
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        bytes32 byteCodeHash =
+            keccak256(abi.encodePacked(type(SimpleAccount).creationCode, abi.encode(entryPoint, owner)));
+        address expectedSender = factory.getAccountAddress(salt, byteCodeHash);
+
+        (EntryPoint.UserOpInfo memory userOpInfo,) = generateUserOpInfo(expectedSender, verificationGas);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, userOpIndex, "AA13 initCode failed or OOG")
+        );
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
+    }
+
+    function testRevertIfAA14() public {
+        AccountFactory factory = new AccountFactory();
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+        uint256 verificationGas = type(uint24).max;
+        uint256 userOpIndex = 0;
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        address wrongSender = makeAddr("wrongSender");
+
+        (EntryPoint.UserOpInfo memory userOpInfo,) = generateUserOpInfo(wrongSender, verificationGas);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, userOpIndex, "AA14 initCode must return sender")
+        );
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
+    }
+
+    function testRevertIfAA15() public {
+        EmptySenderFactory factory = new EmptySenderFactory();
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+        uint256 verificationGas = type(uint24).max;
+        uint256 userOpIndex = 0;
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        address expectedSender = factory.getAccountAddress();
+
+        (EntryPoint.UserOpInfo memory userOpInfo,) = generateUserOpInfo(expectedSender, verificationGas);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, userOpIndex, "AA15 initCode must create sender")
+        );
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
+    }
+
+    function testSenderIsCreated() public {
+        AccountFactory factory = new AccountFactory();
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+        uint256 verificationGas = type(uint24).max;
+        uint256 userOpIndex = 0;
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        bytes32 byteCodeHash =
+            keccak256(abi.encodePacked(type(SimpleAccount).creationCode, abi.encode(entryPoint, owner)));
+        address expectedSender = factory.getAccountAddress(salt, byteCodeHash);
+
+        (EntryPoint.UserOpInfo memory userOpInfo, bytes32 userOpHash) =
+            generateUserOpInfo(expectedSender, verificationGas);
+
+        vm.expectEmit(true, true, false, true, address(entryPoint));
+        emit IEntryPoint.AccountDeployed(userOpHash, expectedSender, address(factory), address(0)); // paymaster address is zero address
+        entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
     }
 }
