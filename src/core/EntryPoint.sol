@@ -489,6 +489,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
     ) internal view {
         (address aggregator, bool outOfTimeRange) = _getValidationData(validationData);
         if (expectedAggregator != aggregator) {
+            console.log("address of the aggregator");
+            console.log(aggregator);
             revert FailedOp(opIndex, "AA24 signature error");
         }
         if (outOfTimeRange) {

@@ -12,6 +12,8 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
+import {console} from "forge-std/console.sol";
+
 contract SimpleAccount is BaseAccount, Ownable {
     error SimpleAccount__callFailed(bytes);
 
@@ -33,10 +35,13 @@ contract SimpleAccount is BaseAccount, Ownable {
     {
         // bytes32 digest = MessageHashUtils.toEthSignedMessageHash(userOpHash);
         address signer = ECDSA.recover(userOpHash, userOp.signature);
-
+        console.log("signer", signer);
+        console.log("owner", owner());
         if (signer == owner()) {
+            console.log("success");
             return SIG_VALIDATION_SUCCESS;
         } else {
+            console.log("failed");
             return SIG_VALIDATION_FAILED;
         }
     }
