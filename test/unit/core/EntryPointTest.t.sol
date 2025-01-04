@@ -906,4 +906,81 @@ contract EntryPointTest is Test {
         emit IEntryPoint.AccountDeployed(userOpHash, expectedSender, address(factory), address(0)); // paymaster address is zero address
         entryPoint.expose_createSenderIfNeeded(userOpIndex, userOpInfo, initCode);
     }
+
+    /*//////////////////////////////////////////////////////////////
+                            GETSENDERADDRESS
+    //////////////////////////////////////////////////////////////*/
+
+    function testReturnsCorrectSenderAddress() public {
+        AccountFactory factory = new AccountFactory();
+
+        address owner = makeAddr("owner");
+        bytes32 salt = keccak256("createSaltForTheAccountFactory");
+
+        bytes memory initCode = abi.encodePacked(
+            address(factory),
+            abi.encodeWithSelector(AccountFactory.createAccount.selector, address(entryPoint), owner, salt)
+        );
+
+        bytes32 byteCodeHash =
+            keccak256(abi.encodePacked(type(SimpleAccount).creationCode, abi.encode(entryPoint, owner)));
+
+        address expectedAddress = factory.getAccountAddress(salt, byteCodeHash);
+
+        vm.expectRevert(abi.encodeWithSelector(IEntryPoint.SenderAddressResult.selector, expectedAddress));
+        entryPoint.getSenderAddress(initCode);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          _VALIDATEPREPAYMENT
+    //////////////////////////////////////////////////////////////*/
+
+    /// @dev generates OpIndex, PackedUserOperation and UserOpInfo for following tests
+    function generatePUOAndUOI(uint256 verificationGasLimt, uint256 nonce)
+        internal
+        returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory, SimpleAccount, uint256)
+    {
+        Account memory owner = makeAccount("owner");
+        uint256 depositAmount = 10 ether;
+
+        SimpleAccount accountContract = new SimpleAccount(entryPoint, owner.addr);
+        entryPoint.depositTo{value: depositAmount}(address(accountContract));
+        
+        PackedUserOperation memory userOp = PackedUserOperation({
+            sender: address(accountContract),
+            nonce: nonce,
+            initCode: hex"",
+            callData: hex"",
+            accountGasLimits: bytes32(verificationGasLimt << 128 | uint256(100_000)),
+            preVerificationGas: uint256(100_000),
+            gasFees: bytes32(uint256(20) << 128 | uint256(20)),
+            paymasterAndData: hex"",
+            signature: hex""
+        });
+
+        bytes32 userOpHash = entryPoint.getUserOpHash(userOp);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner.key, userOpHash);
+        userOp.signature = abi.encodePacked(r, s, v);
+
+        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp(address(0), 0, 0, 0, 0, 0, 0, address(0), 0, 0);
+        EntryPoint.UserOpInfo memory userOpInfo = EntryPoint.UserOpInfo(mUserOp, hex"", 0, 0, 0);
+
+        uint256 opIndex = 0;
+        return (userOp, userOpInfo, accountContract, opIndex);
+    }
+
+    function testValidatePrepayment() public {
+        uint256 verificationGasLimit = 100_000;
+        uint256 nonce = 0;
+
+        uint256 expectedValidationData = 0;
+        uint256 expectedPaymasterValidationData = 0;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo,, uint256 opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
+        
+        (uint256 validationData, uint256 paymasterValidationData) = entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
+
+        assertEq(validationData, expectedValidationData);
+        assertEq(paymasterValidationData, expectedPaymasterValidationData);
+    }
 }
