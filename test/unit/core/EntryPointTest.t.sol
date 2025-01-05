@@ -938,14 +938,14 @@ contract EntryPointTest is Test {
     /// @dev generates OpIndex, PackedUserOperation and UserOpInfo for following tests
     function generatePUOAndUOI(uint256 verificationGasLimt, uint256 nonce)
         internal
-        returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory, SimpleAccount, uint256)
+        returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory, uint256)
     {
         Account memory owner = makeAccount("owner");
         uint256 depositAmount = 10 ether;
 
         SimpleAccount accountContract = new SimpleAccount(entryPoint, owner.addr);
         entryPoint.depositTo{value: depositAmount}(address(accountContract));
-        
+
         PackedUserOperation memory userOp = PackedUserOperation({
             sender: address(accountContract),
             nonce: nonce,
@@ -966,7 +966,7 @@ contract EntryPointTest is Test {
         EntryPoint.UserOpInfo memory userOpInfo = EntryPoint.UserOpInfo(mUserOp, hex"", 0, 0, 0);
 
         uint256 opIndex = 0;
-        return (userOp, userOpInfo, accountContract, opIndex);
+        return (userOp, userOpInfo, opIndex);
     }
 
     function testValidatePrepayment() public {
@@ -976,11 +976,43 @@ contract EntryPointTest is Test {
         uint256 expectedValidationData = 0;
         uint256 expectedPaymasterValidationData = 0;
 
-        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo,, uint256 opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
-        
-        (uint256 validationData, uint256 paymasterValidationData) = entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
+            generatePUOAndUOI(verificationGasLimit, nonce);
+
+        (uint256 validationData, uint256 paymasterValidationData) =
+            entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
 
         assertEq(validationData, expectedValidationData);
         assertEq(paymasterValidationData, expectedPaymasterValidationData);
+    }
+
+    function testValidatePrepaymentReverts() public {
+        // gas overflow
+        uint256 verificationGasLimit = type(uint128).max;
+        uint256 nonce = 0;
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
+            generatePUOAndUOI(verificationGasLimit, nonce);
+
+        vm.expectRevert("AA94 gas values overflow");
+        entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
+
+        // wrong nonce
+        verificationGasLimit = 38_000;
+        nonce = 1;
+
+        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
+
+        vm.expectRevert(abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA25 invalid account nonce"));
+        entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
+
+        // not enough gas
+        nonce = 0;
+        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
+        
+        vm.expectRevert(
+            abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA26 over verificationGasLimit")
+        );
+        entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
     }
 }
