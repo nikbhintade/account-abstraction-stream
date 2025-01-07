@@ -7,6 +7,7 @@ import {EntryPoint} from "src/core/EntryPoint.sol";
 import {BaseAccount} from "src/core/BaseAccount.sol";
 import {IEntryPoint} from "src/interfaces/IEntryPoint.sol";
 import {IStakeManager} from "src/interfaces/IStakeManager.sol";
+import {INonceManager} from "src/interfaces/INonceManager.sol";
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {ValidationData, _packValidationData} from "src/core/Helpers.sol";
 import {SimpleAccount} from "src/samples/SimpleAccount.sol";
@@ -45,6 +46,10 @@ contract SimpleAccountRevert is BaseAccount {
         } else {
             return SIG_VALIDATION_SUCCESS;
         }
+    }
+
+    function failExecute() public pure {
+        revert();
     }
 
     function _payPrefund(uint256 missingAccountFunds) internal override {
@@ -145,6 +150,13 @@ contract EPH is EntryPoint {
 
     function expose_createSenderIfNeeded(uint256 opIndex, UserOpInfo memory opInfo, bytes calldata initCode) external {
         _createSenderIfNeeded(opIndex, opInfo, initCode);
+    }
+
+    function expose_executeUserOp(uint256 opIndex, PackedUserOperation calldata userOp, UserOpInfo memory opInfo)
+        external
+        returns (uint256 collected)
+    {
+        return _executeUserOp(opIndex, userOp, opInfo);
     }
 }
 
@@ -935,22 +947,44 @@ contract EntryPointTest is Test {
                           _VALIDATEPREPAYMENT
     //////////////////////////////////////////////////////////////*/
 
+    /// @dev slice the bytes memory variable
+    function sliceBytes(bytes memory data, uint256 start, uint256 length) internal pure returns (bytes memory) {
+        require(data.length >= start + length, "Slice out of bounds");
+        bytes memory result = new bytes(length);
+        for (uint256 i = 0; i < length; i++) {
+            result[i] = data[start + i];
+        }
+        return result;
+    }
+
     /// @dev generates OpIndex, PackedUserOperation and UserOpInfo for following tests
-    function generatePUOAndUOI(uint256 verificationGasLimt, uint256 nonce)
+    function generatePUOAndUOI(uint256 verificationGasLimt, uint256 nonce, bytes memory callData)
         internal
         returns (PackedUserOperation memory, EntryPoint.UserOpInfo memory, uint256)
     {
         Account memory owner = makeAccount("owner");
         uint256 depositAmount = 10 ether;
 
-        SimpleAccount accountContract = new SimpleAccount(entryPoint, owner.addr);
+        address accountContract;
+        bytes memory userOpCalldata;
+        if (callData.length == 0) {
+            accountContract = address(new SimpleAccount(entryPoint, owner.addr));
+            userOpCalldata = hex"";
+        } else {
+            // extract address of accountContract from callData
+            assembly {
+                accountContract := mload(add(callData, 20))
+            }
+            userOpCalldata = sliceBytes(callData, 20, callData.length - 20);
+        }
+
         entryPoint.depositTo{value: depositAmount}(address(accountContract));
 
         PackedUserOperation memory userOp = PackedUserOperation({
-            sender: address(accountContract),
+            sender: accountContract,
             nonce: nonce,
             initCode: hex"",
-            callData: hex"",
+            callData: callData,
             accountGasLimits: bytes32(verificationGasLimt << 128 | uint256(100_000)),
             preVerificationGas: uint256(100_000),
             gasFees: bytes32(uint256(20) << 128 | uint256(20)),
@@ -977,7 +1011,7 @@ contract EntryPointTest is Test {
         uint256 expectedPaymasterValidationData = 0;
 
         (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
-            generatePUOAndUOI(verificationGasLimit, nonce);
+            generatePUOAndUOI(verificationGasLimit, nonce, bytes(""));
 
         (uint256 validationData, uint256 paymasterValidationData) =
             entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
@@ -992,7 +1026,7 @@ contract EntryPointTest is Test {
         uint256 nonce = 0;
 
         (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
-            generatePUOAndUOI(verificationGasLimit, nonce);
+            generatePUOAndUOI(verificationGasLimit, nonce, bytes(""));
 
         vm.expectRevert("AA94 gas values overflow");
         entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
@@ -1001,18 +1035,72 @@ contract EntryPointTest is Test {
         verificationGasLimit = 38_000;
         nonce = 1;
 
-        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
+        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce, bytes(""));
 
         vm.expectRevert(abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA25 invalid account nonce"));
         entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
 
         // not enough gas
         nonce = 0;
-        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce);
-        
+        (userOp, userOpInfo, opIndex) = generatePUOAndUOI(verificationGasLimit, nonce, bytes(""));
+
         vm.expectRevert(
             abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA26 over verificationGasLimit")
         );
         entryPoint.expose_validatePrepayment(opIndex, userOp, userOpInfo);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                          SUPPORTED INTERFACES
+    //////////////////////////////////////////////////////////////*/
+
+    function testEntryPointSupportsCorrectInterfaces() public view {
+        bytes4 expectedInterfaceId = type(IEntryPoint).interfaceId;
+
+        // check supports IEntryPoint
+        bool result = entryPoint.supportsInterface(expectedInterfaceId);
+        assertEq(result, true);
+
+        // check supports IStakeManager
+        expectedInterfaceId = type(IStakeManager).interfaceId;
+
+        result = entryPoint.supportsInterface(expectedInterfaceId);
+        assertEq(result, true);
+
+        // check supports INonceManager
+        expectedInterfaceId = type(INonceManager).interfaceId;
+
+        result = entryPoint.supportsInterface(expectedInterfaceId);
+        assertEq(result, true);
+
+        // check supports combined interfaceId
+
+        expectedInterfaceId =
+            (type(IEntryPoint).interfaceId ^ type(IStakeManager).interfaceId ^ type(INonceManager).interfaceId);
+
+        result = entryPoint.supportsInterface(expectedInterfaceId);
+        assertEq(result, true);
+
+        // check returns false on wrong interface id
+        expectedInterfaceId = hex"a3b2c1d0";
+
+        result = entryPoint.supportsInterface(expectedInterfaceId);
+        assertEq(result, false);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                             _EXECUTEUSEROP
+    //////////////////////////////////////////////////////////////*/
+
+    function testExecuteUserOpRevertsOnLowPrefuns() public {
+        SimpleAccountRevert accountContract = new SimpleAccountRevert(entryPoint, SimpleAccountRevert.Mode.SendLessPreFund);
+        
+        uint256 verificationGasLimit = 0;
+        uint256 nonce = 0;
+
+        bytes memory callData = abi.encodePacked(address(accountContract), SimpleAccountRevert.failExecute.selector);
+
+        (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
+            generatePUOAndUOI(verificationGasLimit, nonce, callData);
     }
 }
