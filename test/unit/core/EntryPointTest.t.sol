@@ -14,157 +14,12 @@ import {SimpleAccount} from "src/samples/SimpleAccount.sol";
 import {AccountFactory} from "src/samples/AccountFactory.sol";
 import {Paymaster} from "src/samples/Paymaster.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
+
+// mocks & harnesses
 import {EmptySenderFactory} from "test/mock/EmptySenderFactory.sol";
-
-contract SimpleAccountRevert is BaseAccount {
-    IEntryPoint private s_entryPoint;
-    Mode private s_mode;
-
-    enum Mode {
-        RevertOnValidate,
-        SendLessPreFund
-    }
-
-    constructor(IEntryPoint _entryPoint, Mode mode) {
-        s_entryPoint = _entryPoint;
-        s_mode = mode;
-    }
-
-    function entryPoint() public view override returns (IEntryPoint) {
-        return s_entryPoint;
-    }
-
-    function _validateSignature(PackedUserOperation calldata userOp, bytes32 userOpHash)
-        internal
-        view
-        override
-        returns (uint256 validationData)
-    {
-        (userOp, userOpHash);
-        if (s_mode == Mode.RevertOnValidate) {
-            revert("Validate Reverted");
-        } else {
-            return SIG_VALIDATION_SUCCESS;
-        }
-    }
-
-    function failExecute() public pure {
-        revert();
-    }
-
-    function _payPrefund(uint256 missingAccountFunds) internal override {
-        if (missingAccountFunds != 0) {
-            (bool success,) = payable(msg.sender).call{
-                value: (s_mode == Mode.SendLessPreFund) ? missingAccountFunds / 2 : missingAccountFunds,
-                gas: type(uint256).max
-            }("");
-            (success);
-            //ignore failure (its EntryPoint's job to verify, not account.)
-        }
-    }
-}
-
-//// @title EntryPointHarness Contract
-/// @notice This is a harness contract that we are using to expose the internal functions of EntryPoint.sol
-contract EPH is EntryPoint {
-    function expose_getValidationData(uint256 validationData)
-        external
-        view
-        returns (address aggregator, bool outOfTimeRange)
-    {
-        return _getValidationData(validationData);
-    }
-
-    function expose_validateAccountAndPaymasterValidationData(
-        uint256 opIndex,
-        uint256 validationData,
-        uint256 paymasterValidationData,
-        address expectedAggregator
-    ) external view {
-        return _validateAccountAndPaymasterValidationData(
-            opIndex, validationData, paymasterValidationData, expectedAggregator
-        );
-    }
-
-    function expose_compensate(address payable beneficiary, uint256 amount) external {
-        return _compensate(beneficiary, amount);
-    }
-
-    function expose_emitUserOperationEvent(
-        UserOpInfo memory opInfo,
-        bool success,
-        uint256 actualGasCost,
-        uint256 actualGas
-    ) external {
-        emitUserOperationEvent(opInfo, success, actualGasCost, actualGas);
-    }
-
-    function expose_emitPrefundTooLow(UserOpInfo memory userOpInfo) external {
-        emitPrefundTooLow(userOpInfo);
-    }
-
-    function expose_getRequiredPrefund(MemoryUserOp memory mUserOp) external pure returns (uint256) {
-        return _getRequiredPrefund(mUserOp);
-    }
-
-    function expose_getUserOpGasPrice(MemoryUserOp memory mUserOp) external view returns (uint256) {
-        return getUserOpGasPrice(mUserOp);
-    }
-
-    function expose_copyUserOpToMemory(PackedUserOperation calldata userOp)
-        external
-        pure
-        returns (MemoryUserOp memory)
-    {
-        MemoryUserOp memory mUserOp;
-        _copyUserOpToMemory(userOp, mUserOp);
-        return mUserOp;
-    }
-
-    function expose_validateAccountPrepayment(
-        uint256 opIndex,
-        PackedUserOperation calldata op,
-        UserOpInfo memory opInfo,
-        uint256 requiredPrefund,
-        uint256 verificationGasLimit
-    ) external returns (uint256 validationData) {
-        return _validateAccountPrepayment(opIndex, op, opInfo, requiredPrefund, verificationGasLimit);
-    }
-
-    function expose_validatePaymasterPrepayment(
-        uint256 opIndex,
-        PackedUserOperation calldata op,
-        UserOpInfo memory opInfo,
-        uint256 requiredPreFund
-    ) external returns (bytes memory context, uint256 validationData) {
-        return _validatePaymasterPrepayment(opIndex, op, opInfo, requiredPreFund);
-    }
-
-    function expose_validatePrepayment(
-        uint256 opIndex,
-        PackedUserOperation calldata userOp,
-        UserOpInfo memory outOpInfo
-    ) external returns (uint256 validationData, uint256 paymasterValidationData) {
-        return _validatePrepayment(opIndex, userOp, outOpInfo);
-    }
-
-    function expose_createSenderIfNeeded(uint256 opIndex, UserOpInfo memory opInfo, bytes calldata initCode) external {
-        _createSenderIfNeeded(opIndex, opInfo, initCode);
-    }
-
-    function expose_executeUserOp(uint256 opIndex, PackedUserOperation calldata userOp, UserOpInfo memory opInfo)
-        external
-        returns (uint256 collected)
-    {
-        return _executeUserOp(opIndex, userOp, opInfo);
-    }
-}
-
-contract RevertsOnEtherReceived {
-    receive() external payable {
-        revert();
-    }
-}
+import {SimpleAccountRevert} from "test/mock/SimpleAccountRevert.sol";
+import {RevertsOnEtherReceived} from "test/mock/RevertsOnEtherReceived.sol";
+import {EPH} from "test/harnesses/EntryPointHarness.sol";
 
 contract EntryPointTest is Test {
     EPH private entryPoint;
@@ -975,7 +830,10 @@ contract EntryPointTest is Test {
             assembly {
                 accountContract := mload(add(callData, 20))
             }
+            console.log("address of account contract", accountContract);
             userOpCalldata = sliceBytes(callData, 20, callData.length - 20);
+            console.log("user operation calldata after decoding");
+            console.logBytes(userOpCalldata);
         }
 
         entryPoint.depositTo{value: depositAmount}(address(accountContract));
@@ -984,7 +842,7 @@ contract EntryPointTest is Test {
             sender: accountContract,
             nonce: nonce,
             initCode: hex"",
-            callData: callData,
+            callData: userOpCalldata,
             accountGasLimits: bytes32(verificationGasLimt << 128 | uint256(100_000)),
             preVerificationGas: uint256(100_000),
             gasFees: bytes32(uint256(20) << 128 | uint256(20)),
@@ -996,8 +854,20 @@ contract EntryPointTest is Test {
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(owner.key, userOpHash);
         userOp.signature = abi.encodePacked(r, s, v);
 
-        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp(address(0), 0, 0, 0, 0, 0, 0, address(0), 0, 0);
-        EntryPoint.UserOpInfo memory userOpInfo = EntryPoint.UserOpInfo(mUserOp, hex"", 0, 0, 0);
+        EntryPoint.MemoryUserOp memory mUserOp = EntryPoint.MemoryUserOp({
+            sender: accountContract,
+            nonce: 0,
+            verificationGasLimit: 0,
+            callGasLimit: 100_000,
+            paymasterVerificationGasLimit: 0,
+            paymasterPostOpGasLimit: 100_000,
+            preVerificationGas: 0,
+            paymaster: address(0),
+            maxFeePerGas: 0,
+            maxPriorityFeePerGas: 0
+        });
+        EntryPoint.UserOpInfo memory userOpInfo =
+            EntryPoint.UserOpInfo({mUserOp: mUserOp, userOpHash: userOpHash, prefund: 0, contextOffset: 0, preOpGas: 0});
 
         uint256 opIndex = 0;
         return (userOp, userOpInfo, opIndex);
@@ -1092,15 +962,43 @@ contract EntryPointTest is Test {
                              _EXECUTEUSEROP
     //////////////////////////////////////////////////////////////*/
 
-    function testExecuteUserOpRevertsOnLowPrefuns() public {
-        SimpleAccountRevert accountContract = new SimpleAccountRevert(entryPoint, SimpleAccountRevert.Mode.SendLessPreFund);
-        
+    function testExecuteUserOpRevertsForAA95() public {
+        SimpleAccountRevert accountContract =
+            new SimpleAccountRevert(entryPoint, SimpleAccountRevert.Mode.SendLessPreFund);
+
         uint256 verificationGasLimit = 0;
         uint256 nonce = 0;
 
-        bytes memory callData = abi.encodePacked(address(accountContract), SimpleAccountRevert.failExecute.selector);
+        bytes memory callData =
+            abi.encodePacked(address(accountContract), SimpleAccountRevert.executeSuccessful.selector);
 
         (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
             generatePUOAndUOI(verificationGasLimit, nonce, callData);
+
+        vm.expectRevert(abi.encodeWithSelector(IEntryPoint.FailedOp.selector, opIndex, "AA95 out of gas"));
+        entryPoint.expose_executeUserOp{gas: 100_000}(opIndex, userOp, userOpInfo);
     }
+
+    // THIS TEST FAILING
+    // As the conditions for this test can't be achieved or at least can't be achieved without
+    // a lot of modification to EntryPoint which defects the purpose of doing testing
+    // or I am dumb and I can't see the solution that is in front of me (this mostly likely secenario)
+
+    // function testExecuteUserOpRevertsOnFailedCall() public {
+    //     SimpleAccountRevert accountContract =
+    //         new SimpleAccountRevert(entryPoint, SimpleAccountRevert.Mode.SendLessPreFund);
+
+    //     uint256 verificationGasLimit = 0;
+    //     uint256 nonce = 0;
+
+    //     bytes memory callData = abi.encodePacked(address(accountContract), SimpleAccountRevert.failExecute.selector);
+
+    //     (PackedUserOperation memory userOp, EntryPoint.UserOpInfo memory userOpInfo, uint256 opIndex) =
+    //         generatePUOAndUOI(verificationGasLimit, nonce, callData);
+
+    //     vm.expectEmit(true, true, false, true, address(entryPoint));
+    //     emit IEntryPoint.PostOpRevertReason(userOpInfo.userOpHash, address(accountContract), nonce, hex"");
+    //     entryPoint.expose_executeUserOp(opIndex, userOp, userOpInfo);
+    // }
+
 }

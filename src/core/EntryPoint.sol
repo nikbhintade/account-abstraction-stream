@@ -103,6 +103,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             }
         }
         if (!success) {
+            // console.log("hit 0"); // <- why having this is failing our test `testExecuteUserOpRevertsForAA95`
             bytes32 innerRevertCode;
             assembly ("memory-safe") {
                 let len := returndatasize()
@@ -111,11 +112,16 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                     innerRevertCode := mload(0)
                 }
             }
+
+            console.log("value of inner revert code");
+            console.logBytes32(innerRevertCode);
             if (innerRevertCode == INNER_OUT_OF_GAS) {
+                console.log("hit 1");
                 // handleOps was called with gas limit too low. abort entire bundle.
                 //can only be caused by bundler (leaving not enough gas for inner call)
                 revert FailedOp(opIndex, "AA95 out of gas");
             } else if (innerRevertCode == INNER_REVERT_LOW_PREFUND) {
+                console.log("hit 2");
                 // innerCall reverted on prefund too low. treat entire prefund as "gas cost"
                 uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
                 uint256 actualGasCost = opInfo.prefund;
@@ -123,6 +129,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
                 collected = actualGasCost;
             } else {
+                console.log("hit 3");
                 emit PostOpRevertReason(
                     opInfo.userOpHash,
                     opInfo.mUserOp.sender,
@@ -423,7 +430,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 DepositInfo storage senderInfo = deposits[sender];
                 uint256 deposit = senderInfo.deposit;
                 if (requiredPrefund > deposit) {
-                    // account contract is not sending enough eth back 
+                    // account contract is not sending enough eth back
                     revert FailedOp(opIndex, "AA21 didn't pay prefund");
                 }
                 senderInfo.deposit = deposit - requiredPrefund;
