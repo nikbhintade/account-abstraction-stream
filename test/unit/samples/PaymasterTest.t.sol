@@ -9,6 +9,7 @@ import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.so
 import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {Paymaster} from "src/samples/Paymaster.sol";
 import {IStakeManager} from "src/interfaces/IStakeManager.sol";
+import {IPaymaster} from "src/interfaces/IPaymaster.sol";
 
 contract PaymasterHarness is Paymaster {
     constructor(EntryPoint entryPoint) Paymaster(entryPoint) {}
@@ -187,5 +188,21 @@ contract PaymasterTest is Test {
 
         vm.expectRevert("Sender not EntryPoint");
         paymaster.validatePaymasterUserOp(userOp, userOpHash, maxCost);
+    }
+
+    function testPaymasterPostOp() public {
+        // reverts on not being called from entryPoint
+        IPaymaster.PostOpMode mode = IPaymaster.PostOpMode.opSucceeded;
+        bytes memory context = hex"";
+        uint256 actualGasCost = 0;
+        uint256 actualUserOpFeePerGas = 0;
+
+        vm.expectRevert("Sender not EntryPoint");
+        paymaster.postOp(mode, context, actualGasCost, actualUserOpFeePerGas);
+        // reverts on called -> because we haven't overridden the post op function
+
+        vm.prank(address(entryPoint));
+        vm.expectRevert("must override");
+        paymaster.postOp(mode, context, actualGasCost, actualUserOpFeePerGas);
     }
 }
