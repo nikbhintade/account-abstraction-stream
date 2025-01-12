@@ -11,12 +11,7 @@ import {PackedUserOperation} from "src/interfaces/PackedUserOperation.sol";
 import {SIG_VALIDATION_FAILED, SIG_VALIDATION_SUCCESS} from "src/core/Helpers.sol";
 
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-
-contract RevertOnCalledByExecute {
-    fallback() external {
-        revert("revert on receiving ether");
-    }
-}
+import {RevertsOnEtherReceived} from "test/mock/RevertsOnEtherReceived.sol";
 
 contract SimpleAccountHarness is SimpleAccount {
     constructor(IEntryPoint _entryPoint, address _owner) SimpleAccount(_entryPoint, _owner) {}
@@ -69,11 +64,16 @@ contract SimepleAccountTest is Test {
     }
 
     function test_execute_reverts_with_correct_revert_message_and_error() external {
-        RevertOnCalledByExecute revertOnCalledByExecute = new RevertOnCalledByExecute();
+        RevertsOnEtherReceived revertOnCalledByExecute = new RevertsOnEtherReceived();
 
         vm.deal(address(simpleAccount), 10 ether);
         vm.prank(entryPoint);
-        vm.expectRevert(abi.encodeWithSelector(SimpleAccount.SimpleAccount__callFailed.selector, hex"")); // why test is not successful when custom error selector is inculded
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SimpleAccount.SimpleAccount__callFailed.selector,
+                abi.encodeWithSignature("Error(string)", "revert on receiving ether")
+            )
+        ); // why test is not successful when custom error selector is inculded
         simpleAccount.execute(address(revertOnCalledByExecute), 1 ether, hex"");
     }
 

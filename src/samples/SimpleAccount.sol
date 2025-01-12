@@ -38,10 +38,8 @@ contract SimpleAccount is BaseAccount, Ownable {
         console.log("signer", signer);
         console.log("owner", owner());
         if (signer == owner()) {
-            console.log("success");
             return SIG_VALIDATION_SUCCESS;
         } else {
-            console.log("failed");
             return SIG_VALIDATION_FAILED;
         }
     }
@@ -53,5 +51,4 @@ contract SimpleAccount is BaseAccount, Ownable {
             revert SimpleAccount__callFailed(returnData);
         }
     }
-
 }

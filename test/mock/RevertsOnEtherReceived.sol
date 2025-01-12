@@ -3,6 +3,6 @@ pragma solidity 0.8.24;
 
 contract RevertsOnEtherReceived {
     receive() external payable {
-        revert();
+        revert("revert on receiving ether");
     }
 }

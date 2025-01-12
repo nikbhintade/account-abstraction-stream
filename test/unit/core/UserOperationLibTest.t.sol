@@ -69,15 +69,14 @@ contract UserOperationLibTest is Test {
             keccak256(callData),
             bytes32(verificationGasLimit << 128 | callGasLimit),
             preVerificationGas,
-            bytes32(maxFeePerGas << 128 | maxPriorityFee),
+            bytes32(maxPriorityFee << 128 | maxFeePerGas),
             keccak256(
                 abi.encodePacked(paymaster, uint128(paymasterVerificationGasLimit), uint128(paymasterPostOpGasLimit))
             )
         );
-        // assertEq(uolh.encode(userOp), encodedData);
+        assertEq(uolh.encode(userOp), encodedData);
 
         // unpackMaxPriorityFeePerGas
-        console.log(block.basefee);
         assertEq(uolh.unpackMaxPriorityFeePerGas(userOp), maxPriorityFee);
         // unpackMaxFeePerGas
         assertEq(uolh.unpackMaxFeePerGas(userOp), maxFeePerGas);
@@ -99,7 +98,7 @@ contract UserOperationLibTest is Test {
             )
         );
         // hash
-        // assertEq(uolh.hash(userOp), keccak256(encodedData));
+        assertEq(uolh.hash(userOp), keccak256(encodedData));
 
         userOp.gasFees = bytes32(uint256(20) << 128 | uint256(20));
         assertEq(uolh.gasPrice(userOp), maxPriorityFee);
